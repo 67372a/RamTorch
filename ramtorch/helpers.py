@@ -2,7 +2,7 @@ from collections import OrderedDict
 from typing import Callable, Dict
 import torch
 import torch.nn as nn
-from .modules.linear import Linear
+from .modules.linear import Linear, _get_device_state
 
 
 def add_custom_hooks(tensor: torch.Tensor, hook_name: str = "_custom_hooks"):
@@ -251,3 +251,40 @@ def reattach_is_ramtorch_flags(module: nn.Module):
     # Recurse into children
     for child in module.children():
         reattach_is_ramtorch_flags(child)
+
+def transfer_ramtensor_to_device(tensor_cpu: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """
+    Transfer a RamTorch tensor to GPU using asynchronous streams and ping-pong buffers.
+    For non-RamTorch tensors, falls back to standard .to(device).
+    
+    Args:
+        tensor_cpu: Tensor with is_ramtorch=True or regular CPU tensor
+        device: Target GPU device
+    
+    Returns:
+        Tensor on GPU (transfer synchronized with compute stream)
+    """
+    if not getattr(tensor_cpu, 'is_ramtorch', False):
+        return tensor_cpu.to(device, non_blocking=True)
+    
+    state = _get_device_state(device)
+    transfer_stream = state["transfer_stream"]
+    buffers = state["w_buffers"] if tensor_cpu.dim() > 0 else state["b_buffers"]
+    transfer_event = state["transfer_forward_finished_event"]
+    compute_event = state["compute_forward_start_event"]
+    
+    # Ping-pong buffer selection
+    buffer_idx = state["forward_clk"] % 2
+    state["forward_clk"] += 1
+    
+    # Async transfer on dedicated stream
+    with torch.cuda.stream(transfer_stream):
+        transfer_stream.wait_event(compute_event)
+        buffers[buffer_idx] = tensor_cpu.to(device, non_blocking=True)
+        transfer_event.record()
+    
+    # Compute stream waits for transfer
+    torch.cuda.current_stream().wait_event(transfer_event)
+    compute_event.record()
+    
+    return buffers[buffer_idx]
