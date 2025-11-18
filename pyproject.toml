@@ -15,8 +15,8 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-[tool.setuptools]
-py-modules = [ramtorch]
+[tool.setuptools.packages.find]
+include = ["ramtorch"]
 
 [project.urls]
 Homepage = "https://github.com/lodestone-rock/RamTorch"
