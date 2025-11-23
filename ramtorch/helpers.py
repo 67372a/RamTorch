@@ -185,7 +185,7 @@ def move_model_to_device(
     return model
 
 
-def replace_linear_with_ramtorch(module: nn.Module, device: str = "cuda"):
+def replace_linear_with_ramtorch(module: nn.Module, device: str = "cuda", target_dtype: torch.dtype = None):
     """
     Recursively replaces all nn.Linear layers in a model with CPUBouncingLinear.
 
@@ -198,22 +198,30 @@ def replace_linear_with_ramtorch(module: nn.Module, device: str = "cuda"):
     """
     for name, child in list(module.named_children()):
         if isinstance(child, nn.Linear):
+            # Determine dtype: use target if provided, else keep original
+            dtype = target_dtype if target_dtype is not None else child.weight.dtype
+
             # Create a replacement
             new_layer = Linear(
                 child.in_features,
                 child.out_features,
                 bias=child.bias is not None,
                 device=device,
-                dtype=child.weight.dtype,
+                dtype=dtype,
                 skip_init=True,
             )
 
             # Reference weights and bias
             with torch.no_grad():
-                new_layer.weight.data = child.weight.data
+                if child.weight.data.device.type != "meta":
+                    new_layer.weight.data.copy_(child.weight.data.to(dtype=dtype))
+                new_layer.weight.requires_grad = child.weight.requires_grad 
                 new_layer.weight.is_ramtorch = True
+
                 if child.bias is not None:
-                    new_layer.bias.data = child.bias.data
+                    if child.bias.data.device.type != "meta":
+                        new_layer.bias.data.copy_(child.bias.data.to(dtype=dtype))
+                    new_layer.bias.requires_grad = child.bias.requires_grad
                     new_layer.bias.is_ramtorch = True
 
             # Replace the module in-place
@@ -221,7 +229,7 @@ def replace_linear_with_ramtorch(module: nn.Module, device: str = "cuda"):
 
         else:
             # Recurse into children
-            replace_linear_with_ramtorch(child, device=device)
+            replace_linear_with_ramtorch(child, device=device, target_dtype=target_dtype)
 
     return module
 
@@ -251,40 +259,3 @@ def reattach_is_ramtorch_flags(module: nn.Module):
     # Recurse into children
     for child in module.children():
         reattach_is_ramtorch_flags(child)
-
-def transfer_ramtensor_to_device(tensor_cpu: torch.Tensor, device: torch.device) -> torch.Tensor:
-    """
-    Transfer a RamTorch tensor to GPU using asynchronous streams and ping-pong buffers.
-    For non-RamTorch tensors, falls back to standard .to(device).
-    
-    Args:
-        tensor_cpu: Tensor with is_ramtorch=True or regular CPU tensor
-        device: Target GPU device
-    
-    Returns:
-        Tensor on GPU (transfer synchronized with compute stream)
-    """
-    if not getattr(tensor_cpu, 'is_ramtorch', False):
-        return tensor_cpu.to(device, non_blocking=True)
-    
-    state = _get_device_state(device)
-    transfer_stream = state["transfer_stream"]
-    buffers = state["w_buffers"] if tensor_cpu.dim() > 0 else state["b_buffers"]
-    transfer_event = state["transfer_forward_finished_event"]
-    compute_event = state["compute_forward_start_event"]
-    
-    # Ping-pong buffer selection
-    buffer_idx = state["forward_clk"] % 2
-    state["forward_clk"] += 1
-    
-    # Async transfer on dedicated stream
-    with torch.cuda.stream(transfer_stream):
-        transfer_stream.wait_event(compute_event)
-        buffers[buffer_idx] = tensor_cpu.to(device, non_blocking=True)
-        transfer_event.record()
-    
-    # Compute stream waits for transfer
-    torch.cuda.current_stream().wait_event(transfer_event)
-    compute_event.record()
-    
-    return buffers[buffer_idx]
