@@ -23,7 +23,7 @@ _DEVICE_STATE = {}
 def to_stochastic(tensor: torch.Tensor, 
     target_dtype: torch.dtype,
     non_blocking: bool = False,
-    device: str|torch.device = None) -> torch.Tensor:
+    device: torch.device|str = None) -> torch.Tensor:
     """Apply stochastic rounding only for float32 → bfloat16 conversions."""
     if tensor is None:
         return None
@@ -52,8 +52,12 @@ def to_stochastic(tensor: torch.Tensor,
     return tensor.to(dtype=target_dtype, non_blocking=non_blocking, device=device)
 
 
-def _get_device_state(device=torch.cuda.current_device()):
+def _get_device_state(device: torch.device|str = None):
     """Get or initialize per-device state."""
+
+    if device is None:
+        device = torch.cuda.current_device()
+
     if isinstance(device, str):
         device = torch.device(device)
 
@@ -502,7 +506,7 @@ class CPUBouncingLinear(nn.Module):
         out_features,
         bias=True,
         dtype=None,
-        device=torch.cuda.current_device(),
+        device: torch.device|str = None,
         skip_init=False,
     ):
         """
@@ -521,6 +525,13 @@ class CPUBouncingLinear(nn.Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+
+        if device is None:
+            device = torch.cuda.current_device()
+
+        if isinstance(device, str):
+            device = torch.device(device)
+
         self.device = device
         if dtype is None:
             dtype = torch.float32

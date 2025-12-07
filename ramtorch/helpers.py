@@ -147,12 +147,19 @@ def register_ramtorch_post_accumulate_grad_hook(module, hook_fn, param_names=Non
 
 
 def move_model_to_device(
-    model: nn.Module, device: torch.device = torch.cuda.current_device()
+    model: nn.Module, device: torch.device|str = None
 ):
     """
     Moves model parameters and buffers to the specified device,
     but skips any parameter or buffer that has `is_ramtorch = True`.
     """
+
+    if device is None:
+        device = torch.cuda.current_device()
+
+    if isinstance(device, str):
+        device = torch.device(device)
+
     for name, param in model.named_parameters(recurse=True):
         if getattr(param, "is_ramtorch", False):
             # Skip moving this param
