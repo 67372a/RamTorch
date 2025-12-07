@@ -49,7 +49,7 @@ def to_stochastic(tensor: torch.Tensor,
             return result.view(dtype=torch.float32).to(dtype=torch.bfloat16, device=device, non_blocking=non_blocking)
     
     # Standard deterministic rounding for all other cases
-    return tensor.to(target_dtype, non_blocking=non_blocking)
+    return tensor.to(dtype=target_dtype, non_blocking=non_blocking, device=device)
 
 
 def _get_device_state(device=torch.cuda.current_device()):
@@ -232,9 +232,9 @@ class BouncingLinearFn(torch.autograd.Function):
             # Manual casting when autocast is enabled
             if autocast_enabled:
                 x_compute = x.to(autocast_dtype)
-                w_compute = to_stochastic(w_buffers[selected_buffer], autocast_dtype)
+                w_compute = to_stochastic(w_buffers[selected_buffer], autocast_dtype, device=device)
                 b_compute = (
-                    to_stochastic(b_buffers[selected_buffer], autocast_dtype)
+                    to_stochastic(b_buffers[selected_buffer], autocast_dtype, device=device)
                     if b_buffers[selected_buffer] is not None
                     else None
                 )
@@ -347,7 +347,7 @@ class BouncingLinearFn(torch.autograd.Function):
             if ctx.autocast_enabled:
                 grad_out_compute = grad_out.to(ctx.autocast_dtype)
                 x_compute = x.to(ctx.autocast_dtype)
-                w_compute = to_stochastic(w_bwd_buffers[selected_buffer], ctx.autocast_dtype)
+                w_compute = to_stochastic(w_bwd_buffers[selected_buffer], ctx.autocast_dtype, device=ctx.device)
 
                 # compute input grad
                 grad_input = grad_out_compute @ w_compute
