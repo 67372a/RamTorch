@@ -191,6 +191,38 @@ def move_model_to_device(
 
     return model
 
+def _copy_hooks_to_ramtorch(source_param, target_param, hook_type):
+    """
+    Copy hooks from a source parameter to a target ramtorch parameter.
+    
+    Args:
+        source_param:  Original parameter with hooks
+        target_param: New ramtorch parameter to copy hooks to
+        hook_type: Type of hook to copy ('backward', 'post_accumulate')
+    """
+    if hook_type == "backward":
+        # Copy standard backward hooks
+        if hasattr(source_param, "_backward_hooks") and source_param._backward_hooks:
+            if not hasattr(target_param, "_ramtorch_backward_hooks"):
+                target_param._ramtorch_backward_hooks = OrderedDict()
+                target_param._ramtorch_backward_hooks_counter = 0
+            
+            for hook_id, hook_fn in source_param._backward_hooks.items():
+                new_id = target_param._ramtorch_backward_hooks_counter
+                target_param._ramtorch_backward_hooks[new_id] = hook_fn
+                target_param._ramtorch_backward_hooks_counter += 1
+    
+    elif hook_type == "post_accumulate":
+        # Copy post-accumulate grad hooks (PyTorch 2.0+)
+        if hasattr(source_param, "_post_accumulate_grad_hooks") and source_param._post_accumulate_grad_hooks:
+            if not hasattr(target_param, "_ramtorch_post_accumulate_grad_hooks"):
+                target_param._ramtorch_post_accumulate_grad_hooks = OrderedDict()
+                target_param._ramtorch_post_accumulate_grad_hooks_counter = 0
+            
+            for hook_id, hook_fn in source_param._post_accumulate_grad_hooks.items():
+                new_id = target_param._ramtorch_post_accumulate_grad_hooks_counter
+                target_param._ramtorch_post_accumulate_grad_hooks[new_id] = hook_fn
+                target_param._ramtorch_post_accumulate_grad_hooks_counter += 1
 
 def replace_linear_with_ramtorch(module: nn.Module, device: str = "cuda", target_dtype: torch.dtype = None):
     """
@@ -230,6 +262,29 @@ def replace_linear_with_ramtorch(module: nn.Module, device: str = "cuda", target
                         new_layer.bias.data.copy_(child.bias.data.to(dtype=dtype))
                     new_layer.bias.requires_grad = child.bias.requires_grad
                     new_layer.bias.is_ramtorch = True
+
+            # Copy parameter hooks (backward and post-accumulate)
+            _copy_hooks_to_ramtorch(child.weight, new_layer.weight, "backward")
+            _copy_hooks_to_ramtorch(child.weight, new_layer.weight, "post_accumulate")
+            
+            if child.bias is not None and new_layer.bias is not None:
+                _copy_hooks_to_ramtorch(child.bias, new_layer.bias, "backward")
+                _copy_hooks_to_ramtorch(child.bias, new_layer.bias, "post_accumulate")
+            
+            # Copy PyTorch's native module-level forward hooks directly
+            # This makes forward hooks just work without any custom implementation
+            if hasattr(child, "_forward_hooks") and child._forward_hooks:
+                new_layer._forward_hooks = OrderedDict(child._forward_hooks)
+            
+            if hasattr(child, "_forward_pre_hooks") and child._forward_pre_hooks:
+                new_layer._forward_pre_hooks = OrderedDict(child._forward_pre_hooks)
+            
+            # Also copy state dict hooks if present
+            if hasattr(child, "_state_dict_hooks") and child._state_dict_hooks:
+                new_layer._state_dict_hooks = OrderedDict(child._state_dict_hooks)
+            
+            if hasattr(child, "_load_state_dict_pre_hooks") and child._load_state_dict_pre_hooks: 
+                new_layer._load_state_dict_pre_hooks = OrderedDict(child._load_state_dict_pre_hooks)
 
             # Replace the module in-place
             setattr(module, name, new_layer)
