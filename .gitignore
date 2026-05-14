@@ -3,5 +3,11 @@ dist
 *.egg-info
 init.sh
 /.vscode
-
 *.pyc
+.data
+*.safetensors
+*.png
+*.jpg
+data
+__pycache__
+
